@@ -383,6 +383,31 @@ Agent 有工程判断力，但需求要**具体到可验收**。有效 prompt �
     这需要用户在 GitHub 网页端操作，agent 无法自行解决——把仓库内容准备好、做完密钥扫描，
     然后一次性告诉用户需要做哪一步，别每 5 分钟重试。
 
+17. **Phaser Container 的 hitArea 原点用 `-w/2` 会让可点区整体偏移** →
+    `pointWithinHitArea` 会把 `displayOrigin`（Container 恒等于 `width*0.5`）加进局部坐标：
+    `args = entry + (w/2, h/2)`。用 `Rectangle(-w/2, -h/2, w, h)`（中心原点）会让按钮正中点不中，
+    鼠标因亚像素偏移偶尔能点中、触屏整数坐标稳定失败。**必须用左上原点 `Rectangle(0, 0, w, h)`**。
+    跑 `node scripts/check-hitarea.mjs <projectDir>` 扫描（退出码 1 = 有居中原点写法）。
+
+18. **左上原点 `Rectangle(0, 0, w, h)` 仍不够——必须留 1px 余量** →
+    该写法让可点区边界与图形边界**压成同一条线**（entry 范围 ±w/2 → args 范围 [0,w]）。
+    点在容器正中时 args 恰好等于 `(w, h)`，正好卡在边界上，任何浮点误差都判定失败。
+    实测 375×667 视口下 `args_y = 92.0000117 > 92` → 选项卡点不动；
+    而 390×844 能点中纯属侥幸（hover 缩放 1.012 把 entry 变成 45.45，落到内侧）。
+    **修法：共享辅助函数生成带余量的 hitArea**，如
+    `makeHitArea(w, h) => new Phaser.Geom.Rectangle(-1, -1, w + 2, h + 2)`，三处调用点统一走它。
+    注意 `Rectangle(-1, ...)` 会被 `check-hitarea.mjs` 判成 CENTERED——所以辅助函数要单独识别。
+
+19. **触屏验收必须覆盖多个视口，不能只测一个** →
+    `Scale.FIT` 下同一点击在不同视口会因缩放系数不同而产生不同的浮点误差，
+    表现为「390×844 能点、375×667 点不动」。至少测 320/360/375/390/414 宽 + 1280 桌面，
+    且触屏（`Input.dispatchTouchEvent`）与鼠标（`Input.dispatchMouseEvent`）各测一遍。
+    页面内 `dispatchEvent` 合成的 untrusted `PointerEvent` **不能作为结论**。
+
+20. **本地持久化源要和线上保持一致** → 直接改远端文件后，下次部署会覆盖回去。
+    游戏中心列表页的本地源在 `/home/mogege/ohmygame/games-index/index.html`，
+    改远端后必须同步本地（改完用 `diff` 归一化空白后比对线上 HTML 确认一致）。
+
 ## 配套 Skill
 
 - `native-mcp` — MCP 服务接入、HTTP transport、token 自动同步、provider 媒体注册
@@ -400,10 +425,17 @@ Agent 有工程判断力，但需求要**具体到可验收**。有效 prompt �
 - [ ] Agent turn `status` = `completed`，且有 `final_answer`
 - [ ] `npm run build` 通过，`dist/index.html` 存在
 - [ ] `npm test` 通过（若项目有测试）
+- [ ] Phaser 项目：`node scripts/check-hitarea.mjs <projectDir>` → 退出码 0
+- [ ] **多视口触屏验收**（真实 CDP 事件，不用页面内合成 PointerEvent）：
+      320 / 360 / 375 / 390 / 414 宽 + 1280 桌面，每个视口跑「开始 → 答题 → 下一题」
+- [ ] 鼠标路径复测一遍（确认修 hitArea 没让鼠标回归）
+- [ ] 结算页按钮实测（「再闯一关」「返回首页」都要点得动）
 - [ ] `curl -s https://cargo20.com/games/<slug>/` → HTTP 200
 - [ ] 抽查一个 JS 资源和一个图片资源 → HTTP 200（不是 404）
 - [ ] 列表页 `/games/` → HTTP 200 且包含新游戏
+- [ ] 列表页页脚/链接与本地持久化源一致（`/home/mogege/ohmygame/games-index/index.html`）
 - [ ] 手工点开玩一遍主流程
+- [ ] 浏览器控制台无 error/warning、网络无失败请求
 
 ## 附带产物
 
@@ -411,6 +443,9 @@ Agent 有工程判断力，但需求要**具体到可验收**。有效 prompt �
 
 - `scripts/deploy-game.py` — 一键发版（打包 → scp → 解压 → chown → 外网自校验）
 - `scripts/inject-games-nginx.py` — nginx `/games/` 块注入（幂等 + 备份 + 回滚）
+- `scripts/check-hitarea.mjs` — 扫描 Phaser 工程的 `setInteractive` 调用，
+  检查 hitArea 原点约定（居中原点 = 偏移一个身位；识别 `makeHitArea` 这类带余量的辅助函数）
+- `scripts/cdp-click-probe.mjs` — CDP 真实点击探针，输出按钮坐标与命中结果
 - `references/setup.md` — 服务器 / Daemon / MCP / systemd 单元配置参考
 
 **官方示例**（已拉取到 `.runtime/examples/`）可作起点：

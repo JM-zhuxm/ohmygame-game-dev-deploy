@@ -1,0 +1,87 @@
+diff --git a/src/daemon/image-adapters.ts b/src/daemon/image-adapters.ts
+index 3c29563..d26329e 100644
+--- a/src/daemon/image-adapters.ts
++++ b/src/daemon/image-adapters.ts
+@@ -10,6 +10,12 @@ export interface ImageSource {
+   headers?: Record<string, string>;
+   authentication?: "api_key" | "none";
+   apiKeyHeader?: "authorization" | "x-goog-api-key";
++  /**
++   * Strict OpenAI-compatible endpoints (Agnes) reject the optional
++   * `quality` / `output_format` request fields with 400. When false the
++   * adapter omits them.
++   */
++  supportsOptionalFields?: boolean;
+ }
+ 
+ export interface ImageProtocolAdapter {
+@@ -21,7 +27,7 @@ type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Resp
+ export function createImageProtocolAdapters(request: Fetch = fetch): Record<ImageProtocol, ImageProtocolAdapter> {
+   return {
+     "openai-images": {
+-      generate: (source, model, input, signal) => new OpenAIImageGenerator(source.apiKey, source.baseUrl, request, source.headers, source.authentication).generate({ ...input, model }, signal),
++      generate: (source, model, input, signal) => new OpenAIImageGenerator(source.apiKey, source.baseUrl, request, source.headers, source.authentication, source.supportsOptionalFields ?? true).generate({ ...input, model }, signal),
+     },
+     "gemini-generate-content": {
+       generate: (source, model, input, signal) => generateGemini(source, model, input, signal, request),
+diff --git a/src/daemon/openai-image.ts b/src/daemon/openai-image.ts
+index 771c1f2..b0d4a45 100644
+--- a/src/daemon/openai-image.ts
++++ b/src/daemon/openai-image.ts
+@@ -36,6 +36,12 @@ export class OpenAIImageGenerator implements ImageGenerator {
+     private readonly request: Fetch = fetch,
+     private readonly headers: Record<string, string> = {},
+     private readonly authentication: "api_key" | "none" = "api_key",
++    /**
++     * Whether the endpoint accepts the optional `quality` / `output_format`
++     * request fields. Strict OpenAI-compatible providers (Agnes) answer 400
++     * "not supported by text image queue" when they are present.
++     */
++    private readonly supportsOptionalFields = true,
+   ) {}
+ 
+   async generate(input: ImageGenerationInput & { model?: string }, signal?: AbortSignal): Promise<GeneratedImage> {
+@@ -53,8 +59,10 @@ export class OpenAIImageGenerator implements ImageGenerator {
+             model: input.model ?? "gpt-image-2.5-flare",
+             prompt: input.prompt,
+             size,
+-            quality: "medium",
+-            output_format: "webp",
++            // Some OpenAI-compatible image endpoints (e.g. Agnes) reject these
++            // optional fields with 400 "not supported by text image queue".
++            // Only send them when the provider advertises support.
++            ...(this.supportsOptionalFields ? { quality: "medium", output_format: "webp" } : {}),
+             n: 1,
+           });
+       response = await this.request(endpoint, {
+diff --git a/src/daemon/provider-images.ts b/src/daemon/provider-images.ts
+index bedd5aa..e9494b4 100644
+--- a/src/daemon/provider-images.ts
++++ b/src/daemon/provider-images.ts
+@@ -125,7 +125,7 @@ export class ProviderImages implements ImageGenerator {
+     if (!model) return undefined;
+     const settings = provider.models.find((candidate) => candidate.id === model.id)?.usages?.image;
+     const source = await customMediaSource(runtime, provider, settings?.baseUrl, signal);
+-    return { model, source: { ...source, ...(provider.preset === "google" || provider.api === "google-generative-ai" ? { apiKeyHeader: "x-goog-api-key" as const } : {}) } };
++    return { model, source: { ...source, ...(provider.preset === "google" || provider.api === "google-generative-ai" ? { apiKeyHeader: "x-goog-api-key" as const } : {}), ...(supportsOptionalImageFields(provider) ? {} : { supportsOptionalFields: false }) } };
+   }
+ 
+   #seedreamEntry(): CatalogEntry | undefined {
+@@ -329,6 +329,16 @@ async function modelIds(source: ImageSource, request: typeof fetch, signal?: Abo
+     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+   });
+   if (!response.ok) throw new Error(`Model request failed (${response.status})`);
+-  const body = await response.json() as { data?: Array<{ id?: unknown }> };
++  const body = await response.json() as { data?: Array<{ id?: string }> };
+   return (body.data ?? []).flatMap((model) => typeof model.id === "string" ? [model.id] : []);
+ }
++
++/**
++ * Strict OpenAI-compatible image endpoints reject the optional `quality` /
++ * `output_format` request fields. Agnes answers 400
++ * "not supported by text image queue" when they are present, so the adapter
++ * must omit them for that provider.
++ */
++function supportsOptionalImageFields(provider: CustomProviderDetails): boolean {
++  return !/agnes-ai\.com/i.test(provider.baseUrl ?? "");
++}
