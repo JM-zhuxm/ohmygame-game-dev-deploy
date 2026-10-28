@@ -427,8 +427,9 @@ Agent 有工程判断力，但需求要**具体到可验收**。有效 prompt �
 - [ ] `npm test` 通过（若项目有测试）
 - [ ] Phaser 项目：`node scripts/check-hitarea.mjs <projectDir>` → 退出码 0
 - [ ] **多视口触屏验收**（真实 CDP 事件，不用页面内合成 PointerEvent）：
-      320 / 360 / 375 / 390 / 414 宽 + 1280 桌面，每个视口跑「开始 → 答题 → 下一题」
-- [ ] 鼠标路径复测一遍（确认修 hitArea 没让鼠标回归）
+      `node scripts/multi-viewport-test.mjs <url> <cdpPort> touch` → 退出码 0
+      （覆盖 320/360/375/390/414/1280，跑「开始 → 答题 → 下一题」）
+- [ ] 鼠标路径复测：`node scripts/multi-viewport-test.mjs <url> <cdpPort> mouse` → 退出码 0
 - [ ] 结算页按钮实测（「再闯一关」「返回首页」都要点得动）
 - [ ] `curl -s https://cargo20.com/games/<slug>/` → HTTP 200
 - [ ] 抽查一个 JS 资源和一个图片资源 → HTTP 200（不是 404）
@@ -446,6 +447,8 @@ Agent 有工程判断力，但需求要**具体到可验收**。有效 prompt �
 - `scripts/check-hitarea.mjs` — 扫描 Phaser 工程的 `setInteractive` 调用，
   检查 hitArea 原点约定（居中原点 = 偏移一个身位；识别 `makeHitArea` 这类带余量的辅助函数）
 - `scripts/cdp-click-probe.mjs` — CDP 真实点击探针，输出按钮坐标与命中结果
+- `scripts/multi-viewport-test.mjs` — 多视口批量验收（320/360/375/390/414/1280），
+  真实 CDP 触屏与鼠标各跑一遍「开始 → 答题 → 下一题」，退出码非 0 即失败
 - `references/setup.md` — 服务器 / Daemon / MCP / systemd 单元配置参考
 
 **官方示例**（已拉取到 `.runtime/examples/`）可作起点：
